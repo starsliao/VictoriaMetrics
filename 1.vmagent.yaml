@@ -1,0 +1,206 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vmagent
+  namespace: monit
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: vmagent
+rules:
+  - apiGroups: ["", "networking.k8s.io", "extensions"]
+    resources:
+      - nodes
+      - nodes/metrics
+      - nodes/proxy
+      - services
+      - endpoints
+      - endpointslices
+      - pods
+      - app
+      - ingresses
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources:
+      - namespaces
+      - configmaps
+    verbs: ["get"]
+  - nonResourceURLs: ["/metrics", "/metrics/resources"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vmagent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: vmagent
+subjects:
+  - kind: ServiceAccount
+    name: vmagent
+    namespace: monit
+
+---
+# vmagent-config.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vmagent-config
+  namespace: monit
+data:
+  scrape.yml: |
+    global:
+      scrape_interval: 30s
+      scrape_timeout: 30s
+      external_labels:
+        origin_prometheus: prom-master
+
+    scrape_configs:
+      - job_name: 'vmagent'
+        static_configs:
+        - targets: ['localhost:8429']
+      - job_name: 'vmalert'
+        static_configs:
+        - targets: ['vmalert.monit:8080']
+      - job_name: 'alertmanager'
+        static_configs:
+        - targets: ['alertmanager.monit:9093']
+      - job_name: 'victoria-metrics'
+        static_configs:
+        - targets: ['victoria-metrics.monit:8428']
+        basic_auth:
+          username: ops
+          password: wEFHr41Pa
+      - job_name: 'grafana'
+        static_configs:
+        - targets: ['grafana.monit:3000']
+      - job_name: 'k8s-node-exporter'
+        kubernetes_sd_configs:
+        - role: node
+        relabel_configs:
+        - source_labels: [__address__]
+          regex: '(.*):10250'
+          replacement: '${1}:9100'
+          target_label: __address__
+          action: replace
+        - action: replace
+          regex: (.*)
+          replacement: $1
+          source_labels: [__meta_kubernetes_node_name]
+          target_label: kubernetes_node
+      - job_name: 'k8s-kubelet'
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        kubernetes_sd_configs:
+        - role: node
+        relabel_configs:
+        - target_label: __address__
+          replacement: kubernetes.default.svc:443
+        - source_labels: [__meta_kubernetes_node_name]
+          regex: (.+)
+          target_label: __metrics_path__
+          replacement: /api/v1/nodes/${1}/proxy/metrics
+      - job_name: 'k8s-cadvisor'
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        kubernetes_sd_configs:
+        - role: node
+        relabel_configs:
+        - target_label: __address__
+          replacement: kubernetes.default.svc:443
+        - source_labels: [__meta_kubernetes_node_name]
+          regex: (.+)
+          target_label: __metrics_path__
+          replacement: /api/v1/nodes/${1}/proxy/metrics/cadvisor
+        metric_relabel_configs:
+        - source_labels: [instance]
+          separator: ;
+          regex: (.+)
+          target_label: node
+          replacement: $1
+          action: replace
+      - job_name: 'kube-state-metrics'
+        kubernetes_sd_configs:
+        - role: endpoints
+          namespaces:
+            names:
+            - monit
+        relabel_configs:
+        - source_labels: [__meta_kubernetes_service_label_app_kubernetes_io_name]
+          regex: kube-state-metrics
+          replacement: $1
+          action: keep
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vmagent
+  namespace: monit
+  labels:
+    app: vmagent
+spec:
+  selector:
+    matchLabels:
+      app: vmagent
+  template:
+    metadata:
+      labels:
+        app: vmagent
+    spec:
+      serviceAccountName: vmagent
+      containers:
+        - name: vmagent
+          image: "victoriametrics/vmagent:latest"
+          imagePullPolicy: IfNotPresent
+          args:
+            - -promscrape.config=/config/scrape.yml
+            - -remoteWrite.url=http://ops:wEFHr41Pa@victoria-metrics.monit:8428/api/v1/write
+            - -promscrape.maxScrapeSize=500MB
+            - -remoteWrite.disableOnDiskQueue
+            - -loggerTimezone=Asia/Shanghai
+            #- -remoteWrite.dropSamplesOnOverload
+          env:
+            - name: TZ
+              value: Asia/Shanghai
+          ports:
+            - name: http
+              containerPort: 8429
+          volumeMounts:
+            - name: config
+              mountPath: /config
+          resources:
+            limits:
+              cpu: '2'
+              memory: 2Gi
+            requests:
+              cpu: 100m
+              memory: 256Mi
+      volumes:
+        - name: config
+          configMap:
+            name: vmagent-config
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vmagent
+  namespace: monit
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8429"
+spec:
+  selector:
+    app: vmagent
+  ports:
+    - name: http
+      port: 8429
+      targetPort: http
+  type: NodePort

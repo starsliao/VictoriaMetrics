@@ -1,0 +1,122 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+  namespace: monit
+data:
+  config.yml: |-
+    global:
+      resolve_timeout: 10m
+    route:
+      group_by: ['origin_prometheus','alertname']
+      group_wait: 15s
+      group_interval: 1m
+      repeat_interval: 20m
+      receiver: 'webhook-dd'
+      routes:
+      - receiver: 'webhook-dd'
+        continue: false
+        match_re:
+          alertname: .*
+    receivers:
+    - name: 'webhook-dd'
+      webhook_configs:
+      - url: 'http://alert-webhook.monit/node/ddkey=f290f47a-ce05-4955-8d21-dbc28ca'
+        send_resolved: true
+    inhibit_rules:
+    - source_match_re:
+        inhibit: K8S_Pod_status
+      target_match_re:
+        alertname: K8S_Pod_CPU总使用率|(K8S_Pod_内存使用).*
+      equal: ['pod']
+    
+    - source_match_re:
+        alertname: (K8S_Pod_内存使用).*
+        severity: 'R2'
+      target_match_re:
+        alertname: (K8S_Pod_内存使用).*
+        severity: 'R1'
+      equal: ['pod']
+    
+    - source_match:
+        inhibit: K8S_Pod_status
+        severity: 'R4'
+      target_match_re:
+        inhibit: K8S_Pod_status
+        severity: R1|R2|R3
+      equal: ['pod']
+    
+    - source_match:
+        inhibit: K8S_Pod_status
+        severity: 'R2'
+      target_match_re:
+        inhibit: K8S_Pod_status
+        severity: R1|R3
+      equal: ['pod']
+    
+    - source_match:
+        inhibit: K8S_Pod_status
+        severity: 'R3'
+      target_match:
+        inhibit: K8S_Pod_status
+        severity: 'R1'
+      equal: ['pod']
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager
+  namespace: monit
+  labels:
+    app: alertmanager
+spec:
+  selector:
+    app: alertmanager
+  type: NodePort
+  ports:
+    - name: web
+      port: 9093
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager
+  namespace: monit
+  labels:
+    app: alertmanager
+spec:
+  selector:
+    matchLabels:
+      app: alertmanager
+  template:
+    metadata:
+      labels:
+        app: alertmanager
+    spec:
+      volumes:
+        - name: alertcfg
+          configMap:
+            name: alertmanager-config
+      containers:
+        - name: alertmanager
+          image: prom/alertmanager:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: TZ
+              value: Asia/Shanghai
+          args:
+            - "--config.file=/etc/alertmanager/config.yml"
+          ports:
+            - containerPort: 9093
+              name: http
+          volumeMounts:
+            - mountPath: "/etc/alertmanager"
+              name: alertcfg
+          resources:
+            limits:
+              cpu: '2'
+              memory: 2Gi
+            requests:
+              cpu: 100m
+              memory: 256Mi

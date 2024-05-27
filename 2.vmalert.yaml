@@ -1,0 +1,93 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vmalert-config
+  namespace: monit
+data:
+  node.yaml: |-
+    groups:
+    - name: Itself
+      rules:
+      - alert: Exporter状态
+        expr: up == 0
+        for: 3m
+        labels:
+          alertype: itself
+          severity: critical
+        annotations:
+          description: "{{ $labels.job }}：异常\n> {{origin_prometheus}}: {{ $labels.instance }}"
+  record.yaml: |
+    groups:
+    - name: node_usage_record_rules
+      interval: 1m
+      rules:
+      - record: cpu:usage:rate1m
+        expr: (1 - avg(irate(node_cpu_seconds_total{mode="idle"}[3m])) by (origin_prometheus,instance,job)) * 100
+      - record: mem:usage:rate1m
+        expr: (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vmalert
+  namespace: monit
+  labels:
+    app: vmalert
+spec:
+  ports:
+    - name: vmalert
+      port: 8080
+      targetPort: 8080
+  type: NodePort
+  selector:
+    app: vmalert
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vmalert
+  namespace: monit
+  labels:
+    app: vmalert
+spec:
+  selector:
+    matchLabels:
+      app: vmalert
+  template:
+    metadata:
+      labels:
+        app: vmalert
+    spec:
+      containers:
+        - name: vmalert
+          image: victoriametrics/vmalert:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - -rule=/etc/ruler/*.yaml
+            - -datasource.url=http://ops:wEFHr41Pa@victoria-metrics.monit:8428
+            - -notifier.url=http://alertmanager.monit:9093
+            - -remoteWrite.url=http://ops:wEFHr41Pa@victoria-metrics.monit:8428
+            - -evaluationInterval=15s
+            - -httpListenAddr=0.0.0.0:8080
+          env:
+            - name: TZ
+              value: Asia/Shanghai
+          resources:
+            limits:
+              cpu: '2'
+              memory: 2Gi
+            requests:
+              cpu: 100m
+              memory: 256Mi
+          ports:
+            - containerPort: 8080
+              name: http
+          volumeMounts:
+            - mountPath: /etc/ruler/
+              name: ruler
+              readOnly: true
+      volumes:
+        - configMap:
+            name: vmalert-config
+          name: ruler

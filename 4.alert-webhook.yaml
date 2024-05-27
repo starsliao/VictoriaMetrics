@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alert-webhook
+  namespace: monit
+  labels:
+    app: alert-webhook
+    app.kubernetes.io/instance: alert-webhook
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: alert-webhook
+  template:
+    metadata:
+      labels:
+        app: alert-webhook
+    spec:
+      containers:
+        - name: alert-webhook
+          image: registry.cn-shenzhen.aliyuncs.com/starsl/alert-webhook:latest
+          env:
+            - name: TZ
+              value: Asia/Shanghai
+            - name: ALERTMANAGER_URL
+              value: http://10.0.0.26:9095
+            - name: DEFAULT_AT
+              value: a00213
+          resources:
+            limits:
+              cpu: '1'
+              memory: 1Gi
+            requests:
+              cpu: 1m
+              memory: 1Mi
+          livenessProbe:
+            tcpSocket:
+              port: 80
+            timeoutSeconds: 1
+            periodSeconds: 10
+            successThreshold: 1
+            failureThreshold: 3
+          readinessProbe:
+            tcpSocket:
+              port: 80
+            timeoutSeconds: 1
+            periodSeconds: 10
+            successThreshold: 1
+            failureThreshold: 3
+          imagePullPolicy: Always
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alert-webhook
+  namespace: monit
+  labels:
+    app: alert-webhook
+    app.kubernetes.io/instance: alert-webhook
+
+spec:
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+  selector:
+    app: alert-webhook
+  type: NodePort
+  externalTrafficPolicy: Local
+

@@ -1,0 +1,96 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monit
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: victoria-metrics
+  namespace: monit
+spec:
+  selector:
+    matchLabels:
+      app: victoria-metrics
+  template:
+    metadata:
+      labels:
+        app: victoria-metrics
+    spec:
+      volumes:
+        - name: storage
+          persistentVolumeClaim:
+            claimName: victoria-metrics-data
+      containers:
+        - name: vm
+          image: victoriametrics/victoria-metrics:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - -storageDataPath=/var/lib/victoria-metrics-data
+            - -retentionPeriod=30d
+            - -httpAuth.username=ops 
+            - -httpAuth.password=wEFHr41Pa
+            - -search.maxQueryLen=655350
+          ports:
+            - containerPort: 8428
+              name: http
+          volumeMounts:
+            - mountPath: /var/lib/victoria-metrics-data
+              name: storage
+          env:
+            - name: TZ
+              value: Asia/Shanghai
+          resources:
+            limits:
+              cpu: '4'
+              memory: 8Gi
+            requests:
+              cpu: 150m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: victoria-metrics
+  namespace: monit
+spec:
+  type: NodePort
+  ports:
+    - port: 8428
+  selector:
+    app: victoria-metrics
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: victoria-metrics-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  capacity:
+    storage: 100Gi
+  storageClassName: local-path
+  local:
+    path: /k3s/data/vm-single
+  persistentVolumeReclaimPolicy: Retain
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - devserver-9339
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: victoria-metrics-data
+  namespace: monit
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Gi
+  storageClassName: local-path
