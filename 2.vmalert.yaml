@@ -15,7 +15,7 @@ data:
           alertype: itself
           severity: critical
         annotations:
-          description: "{{ $labels.job }}：异常\n> {{origin_prometheus}}: {{ $labels.instance }}"
+          description: "{{ $labels.job }}：异常\n> {{ $labels.origin_prometheus }}: {{ $labels.instance }}"
   record.yaml: |
     groups:
     - name: node_usage_record_rules
